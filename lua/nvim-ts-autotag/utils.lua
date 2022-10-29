@@ -48,4 +48,24 @@ M.dump_node_text = function(target)
     end
     log.debug('=============================')
 end
+
+M.get_buf_line = function(lnum)
+    local line = vim.api.nvim_buf_get_lines(0, lnum, lnum + 1, true)[1]
+    return line
+end
+
+
+M.get_cursor_prev_node = function()
+    local lnum, col = unpack(vim.api.nvim_win_get_cursor(0))
+    lnum = lnum - 1
+    col = col - 1
+
+    local root = ts_utils.get_root_for_position(lnum, col)
+    if not root then
+        return
+    end
+
+    return root:named_descendant_for_range(lnum, col, lnum, col)
+end
+
 return M

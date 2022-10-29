@@ -1,8 +1,7 @@
 local _, ts_utils = pcall(require, 'nvim-treesitter.ts_utils')
-local configs = require('nvim-treesitter.configs')
-local parsers = require('nvim-treesitter.parsers')
+local parsers = require'nvim-treesitter.parsers'
 local log = require('nvim-ts-autotag._log')
-local utils = require('nvim-ts-autotag.utils')
+local utils =  require('nvim-ts-autotag.utils')
 
 local M = {}
 
@@ -96,15 +95,22 @@ local all_tag = {
     SVELTE_TAG,
     JSX_TAG,
 }
+
+local AUGROUP = vim.api.nvim_create_augroup("nvim-ts-autotag", {})
+
 M.enable_rename = true
 M.enable_close = true
 
 M.setup = function(opts)
     opts = opts or {}
     M.tbl_filetypes = opts.filetypes or M.tbl_filetypes
-    M.tbl_skipTag = opts.skip_tag or M.tbl_skipTag
-    M.enable_rename = opts.enable_rename or M.enable_rename
-    M.enable_close = opts.enable_close or M.enable_close
+    M.tbl_skipTag   = opts.skip_tag or M.tbl_skipTag
+    if opts.enable_rename ~= nil then
+        M.enable_rename = opts.enable_rename
+    end
+    if opts.enable_close ~= nil then
+        M.enable_close = opts.enable_close
+    end
 end
 
 local function is_in_table(tbl, val)
@@ -230,8 +236,8 @@ local function get_tag_name(node)
 end
 
 local function find_tag_node(opt)
-    local target = opt.target or ts_utils.get_node_at_cursor()
-    local tag_pattern = opt.tag_pattern
+    local target           = opt.target or utils.get_cursor_prev_node()
+    local tag_pattern      = opt.tag_pattern
     local name_tag_pattern = opt.name_tag_pattern
     local skip_tag_pattern = opt.skip_tag_pattern
     local find_child = opt.find_child or false
@@ -337,8 +343,10 @@ M.close_tag = function()
     buf_parser:parse()
     local result, tag_name = check_close_tag()
     if result == true and tag_name ~= nil then
-        vim.api.nvim_put({ string.format("</%s>", tag_name) }, "", true, false)
-        vim.cmd([[normal! F>]])
+        local lnum, col = unpack(vim.api.nvim_win_get_cursor(0))
+        vim.api.nvim_buf_set_text(0, lnum - 1, col, lnum - 1, col, {
+            "</" .. tag_name .. ">"
+        })
     end
 end
 
@@ -350,15 +358,12 @@ local function replace_text_node(node, tag_name)
     end
     local start_row, start_col, end_row, end_col = node:range()
     if start_row == end_row then
-        local line = vim.fn.getline(start_row + 1)
-        local newline = line:sub(0, start_col)
-            .. tag_name
-            .. line:sub(end_col + 1, string.len(line))
-        vim.fn.setline(start_row + 1, { newline })
+        vim.api.nvim_buf_set_text(0, start_row, start_col, end_row, end_col, { tag_name })
     end
 end
 
-local function validate_tag_regex(node, start_regex, end_regex)
+
+local function validate_tag_regex(node,start_regex,end_regex)
     if node == nil then
         return false
     end
@@ -501,6 +506,9 @@ local function rename_end_tag()
         tag_pattern = ts_tag.start_tag_pattern,
         name_tag_pattern = ts_tag.start_name_tag_pattern,
     })
+    if not start_tag_node then
+        return
+    end
     if not validate_start_tag(start_tag_node:parent()) then
         return
     end
@@ -514,8 +522,8 @@ end
 
 local function validate_rename()
     local cursor = vim.api.nvim_win_get_cursor(0)
-    local line = vim.api.nvim_get_current_line()
-    local char = line:sub(cursor[2] + 1, cursor[2] + 1)
+    local line   = utils.get_buf_line(cursor[1] - 1)
+    local char   = line:sub(cursor[2] + 1, cursor[2] + 1)
     -- only rename when last character is a word
     if string.match(char, '%w') then
         return true
@@ -531,27 +539,26 @@ M.rename_tag = function()
     end
 end
 
-M.attach = function(bufnr, lang)
-    M.lang = lang
-    local config = configs.get_module('autotag')
-    M.setup(config)
+M.attach = function (bufnr, lang)
     if is_in_table(M.tbl_filetypes, vim.bo.filetype) then
         setup_ts_tag()
         if M.enable_close == true then
-            vim.api.nvim_buf_set_keymap(bufnr or 0, 'i', ">", ">", {
-                noremap = true,
-                silent = true,
+            -- vim.cmd[[inoremap <silent> <buffer> > ><c-c>:lua require('nvim-ts-autotag.internal').close_tag()<CR>a]]
+            vim.api.nvim_create_autocmd("InsertCharPre", {
+                group = AUGROUP,
+                buffer = bufnr,
                 callback = function()
-                    local row, col = unpack(vim.api.nvim_win_get_cursor(0))
-                    vim.api.nvim_buf_set_text(bufnr or 0, row - 1, col, row - 1, col, { '>' })
-                    M.close_tag()
-                    vim.api.nvim_win_set_cursor(0, { row, col + 1 })
+                    if vim.v.char == ">" then
+                        -- defer to wait ">" inserted
+                        vim.schedule(M.close_tag)
+                    end
                 end
             })
         end
         if M.enable_rename == true then
             bufnr = bufnr or vim.api.nvim_get_current_buf()
-            vim.api.nvim_create_autocmd('InsertLeave', {
+            vim.api.nvim_create_autocmd({ "InsertLeave", "TextChanged" }, {
+                group = AUGROUP,
                 buffer = bufnr,
                 callback = M.rename_tag
             })
@@ -559,9 +566,13 @@ M.attach = function(bufnr, lang)
     end
 end
 
-M.detach = function()
-    local bufnr = vim.api.nvim_get_current_buf()
+M.detach = function(bufnr)
+    bufnr = tonumber(bufnr) or vim.api.nvim_get_current_buf()
     buffer_tag[bufnr] = nil
+    vim.api.nvim_clear_autocmds({
+        buffer = bufnr,
+        group = AUGROUP,
+    })
 end
 
 -- _G.AUTO = M
