@@ -237,6 +237,10 @@ end
 
 local function find_tag_node(opt)
     local target           = opt.target or utils.get_cursor_prev_node()
+    if not target then
+        return
+    end
+
     local tag_pattern      = opt.tag_pattern
     local name_tag_pattern = opt.name_tag_pattern
     local skip_tag_pattern = opt.skip_tag_pattern
